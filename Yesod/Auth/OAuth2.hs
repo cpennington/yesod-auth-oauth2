@@ -22,15 +22,15 @@ import Data.Text.Encoding (decodeUtf8With, encodeUtf8)
 import Data.Text.Encoding.Error (lenientDecode)
 import Data.Typeable
 import Network.OAuth.OAuth2
+import Network.HTTP.Conduit(Manager)
 import Yesod.Auth
 import Yesod.Core
 import Yesod.Form
 
 import qualified Data.ByteString.Lazy as BSL
 
-data YesodOAuth2Exception = InvalidProfileResponse
-    Text           -- ^ Provider name
-    BSL.ByteString -- ^ Aeson parse error
+-- | Provider name and Aeson parse error
+data YesodOAuth2Exception = InvalidProfileResponse Text BSL.ByteString
     deriving (Show, Typeable)
 
 instance Exception YesodOAuth2Exception
@@ -41,7 +41,7 @@ oauth2Url name = PluginR name ["forward"]
 authOAuth2 :: YesodAuth m
            => Text   -- ^ Service name
            -> OAuth2 -- ^ Service details
-           -> (AccessToken -> IO (Creds m))
+           -> (Manager -> AccessToken -> IO (Creds m))
            -- ^ This function defines how to take an @'AccessToken'@ and
            --   retrieve additional information about the user, to be
            --   set in the session as @'Creds'@. Usually this means a
@@ -64,12 +64,13 @@ authOAuth2 name oauth getCreds = AuthPlugin name dispatch login
         dispatch "GET" ["callback"] = do
             code <- lift $ runInputGet $ ireq textField "code"
             oauth' <- withCallback
-            result <- liftIO $ fetchAccessToken oauth' (encodeUtf8 code)
+            master <- lift getYesod
+            result <- liftIO $ fetchAccessToken (authHttpManager master) oauth' (encodeUtf8 code)
             case result of
                 Left _ -> permissionDenied "Unable to retreive OAuth2 token"
                 Right token -> do
-                    creds <- liftIO $ getCreds token
-                    lift $ setCreds True creds
+                    creds <- liftIO $ getCreds (authHttpManager master) token
+                    lift $ setCredsRedirect creds
 
         dispatch _ _ = notFound
 
